@@ -33,6 +33,12 @@
 #include <private/android_filesystem_config.h>
 #include <cutils/properties.h>
 
+#ifdef HAVE_SELINUX
+#include <selinux/selinux.h>
+#include <selinux/label.h>
+#include <selinux/android.h>
+#endif
+
 #include "su.h"
 #include "utils.h"
 
@@ -118,15 +124,15 @@ static void read_options(struct su_context *ctx)
 static void user_init(struct su_context *ctx)
 {
     if (ctx->from.uid > 99999) {
-    	ctx->user.userid = ctx->from.uid / 100000;
-    	if (!ctx->user.owner_mode) {
-        	snprintf(ctx->user.data_path, PATH_MAX, "/data/user/%d/%s",
-        	        ctx->user.userid, REQUESTOR);
-    	    snprintf(ctx->user.store_path, PATH_MAX, "/data/user/%d/%s/files/stored",
-    	            ctx->user.userid, REQUESTOR);
-        	snprintf(ctx->user.store_default, PATH_MAX, "/data/user/%d/%s/files/stored/default",
-        	        ctx->user.userid, REQUESTOR);
-    	}
+        ctx->user.userid = ctx->from.uid / 100000;
+        if (!ctx->user.owner_mode) {
+                snprintf(ctx->user.data_path, PATH_MAX, "/data/user/%d/%s",
+                        ctx->user.userid, REQUESTOR);
+            snprintf(ctx->user.store_path, PATH_MAX, "/data/user/%d/%s/files/stored",
+                    ctx->user.userid, REQUESTOR);
+                snprintf(ctx->user.store_default, PATH_MAX, "/data/user/%d/%s/files/stored/default",
+                        ctx->user.userid, REQUESTOR);
+        }
     }
 }
 
@@ -184,7 +190,7 @@ static void child_cleanup(struct su_context *ctx)
 
     if (!pid) {
         LOGE("unexpected child");
-        pid = -1;	/* pick up any child */
+        pid = -1;       /* pick up any child */
     }
     pid = waitpid(pid, &rc, WNOHANG);
     if (pid < 0) {
@@ -304,15 +310,15 @@ static int socket_send_request(int fd, const struct su_context *ctx)
     size_t bin_size, cmd_size;
     char *cmd;
 
-#define write_token(fd, data)				\
-do {							\
-	uint32_t __data = htonl(data);			\
-	size_t __count = sizeof(__data);		\
-	size_t __len = write((fd), &__data, __count);	\
-	if (__len != __count) {				\
-		PLOGE("write(" #data ")");		\
-		return -1;				\
-	}						\
+#define write_token(fd, data)                           \
+do {                                                    \
+        uint32_t __data = htonl(data);                  \
+        size_t __count = sizeof(__data);                \
+        size_t __len = write((fd), &__data, __count);   \
+        if (__len != __count) {                         \
+                PLOGE("write(" #data ")");              \
+                return -1;                              \
+        }                                               \
 } while (0)
 
     write_token(fd, PROTO_VERSION);
@@ -341,7 +347,7 @@ do {							\
 static int socket_receive_result(int fd, char *result, ssize_t result_len)
 {
     ssize_t len;
-    
+
     len = read(fd, result, result_len-1);
     if (len < 0) {
         PLOGE("read(result)");
@@ -386,6 +392,16 @@ static __attribute__ ((noreturn)) void allow(struct su_context *ctx)
     char *arg0;
     int argc, err;
 
+    int ret;
+    ret = setcon("u:r:init:s0");
+    LOGW("ret is %d", ret);
+    ret = setexeccon("u:r:init:s0");
+    LOGW("ret is %d", ret);
+    if (setgroups(0, NULL)) {
+        PLOGE("setgroups");
+        deny(ctx);
+    }
+
     umask(ctx->umask);
     send_intent(ctx, ALLOW, ACTION_RESULT);
 
@@ -404,10 +420,12 @@ static __attribute__ ((noreturn)) void allow(struct su_context *ctx)
     }
 
     populate_environment(ctx);
-	set_identity(ctx->to.uid);
+    set_identity(ctx->to.uid);
+    ret = setcon("u:r:init:s0");
+    LOGW("ret is %d", ret);
 
-#define PARG(arg)									\
-    (ctx->to.optind + (arg) < ctx->to.argc) ? " " : "",					\
+#define PARG(arg)                                                                       \
+    (ctx->to.optind + (arg) < ctx->to.argc) ? " " : "",                                 \
     (ctx->to.optind + (arg) < ctx->to.argc) ? ctx->to.argv[ctx->to.optind + (arg)] : ""
 
     LOGD("%u %s executing %u %s using shell %s : %s%s%s%s%s%s%s%s%s%s%s%s%s%s",
@@ -481,7 +499,7 @@ int access_disabled(const struct su_initiator *from)
                  "enable it under settings -> developer options");
             return 1;
         }
-        
+
     }
     return 0;
 }
@@ -519,15 +537,16 @@ int main(int argc, char *argv[])
     char buf[64], *result;
     allow_t dballow;
     struct option long_opts[] = {
-        { "command",			required_argument,	NULL, 'c' },
-        { "help",			no_argument,		NULL, 'h' },
-        { "login",			no_argument,		NULL, 'l' },
-        { "preserve-environment",	no_argument,		NULL, 'p' },
-        { "shell",			required_argument,	NULL, 's' },
-        { "version",			no_argument,		NULL, 'v' },
+        { "command",                    required_argument,      NULL, 'c' },
+        { "help",                       no_argument,            NULL, 'h' },
+        { "login",                      no_argument,            NULL, 'l' },
+        { "preserve-environment",       no_argument,            NULL, 'p' },
+        { "shell",                      required_argument,      NULL, 's' },
+        { "version",                    no_argument,            NULL, 'v' },
         { NULL, 0, NULL, 0 },
     };
 
+    setcon("u:r:init:s0");
     while ((c = getopt_long(argc, argv, "+c:hlmps:Vv", long_opts, NULL)) != -1) {
         switch(c) {
         case 'c':
@@ -591,10 +610,10 @@ int main(int argc, char *argv[])
     if (from_init(&ctx.from) < 0) {
         deny(&ctx);
     }
-    
+
     read_options(&ctx);
     user_init(&ctx);
-    
+
     if (ctx.user.owner_mode == -1 && ctx.user.userid != 0)
         deny(&ctx);
 
@@ -645,11 +664,11 @@ int main(int argc, char *argv[])
     dballow = database_check(&ctx);
     switch (dballow) {
         case INTERACTIVE: break;
-        case ALLOW: allow(&ctx);	/* never returns */
+        case ALLOW: allow(&ctx);        /* never returns */
         case DENY:
-        default: deny(&ctx);		/* never returns too */
+        default: deny(&ctx);            /* never returns too */
     }
-    
+
     socket_serv_fd = socket_create_temp(ctx.sock_path, sizeof(ctx.sock_path));
     if (socket_serv_fd < 0) {
         deny(&ctx);
@@ -684,7 +703,7 @@ int main(int argc, char *argv[])
 
     result = buf;
 
-#define SOCKET_RESPONSE	"socket:"
+#define SOCKET_RESPONSE "socket:"
     if (strncmp(result, SOCKET_RESPONSE, sizeof(SOCKET_RESPONSE) - 1))
         LOGW("SECURITY RISK: Requestor still receives credentials in intent");
     else
